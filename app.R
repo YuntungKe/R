@@ -1,6 +1,7 @@
 library(shiny)
+library(shinyBS)
+library(shinyjs)
 library(shinythemes)
-library(rsconnect)
 library(tidyverse)
 library(readxl)
 
@@ -30,18 +31,32 @@ for (v in c(code_valid)) {
 }  
 List_complete <- as.data.frame(List_complete) #代號存在且資料筆數完整
 
+jsResetCode <- "shinyjs.reset = function() {history.go(0)}"
 
 ###ui######################################################
 ui <- fluidPage(theme = shinytheme("flatly"),
+                
                 navbarPage(
-                  
                   "Stock Risk Management",
+                  
                   tabPanel("持股健檢",
                            sidebarPanel(
                              h3("輸入："),
-                             textInput("txt1", "個股代碼", placeholder = "以逗號隔開(ex.1101,2330,...)"),
-                             textInput("txt2", "個股張數", placeholder = "以逗號隔開(ex.2,3,...)"),
-                             actionButton("submitbutton", "Submit", class = "btn btn-primary")
+                             textInput("txt1", p("個股代碼",popify(a(icon("fas fa-external-link-alt"), href = "https://tw.stock.yahoo.com/h/kimosel.php"),
+                                                                  title = "代碼查詢",
+                                                                  content = paste0("點選 ", icon = icon("fas fa-external-link-alt"), "前往Yahoo!奇摩股市 - 股票代號查詢"),
+                                                                  placement = "right")
+                                                 ), 
+                                       placeholder = "以「空白鍵」隔開 (ex.1101 2330 ...)"),
+                             textInput("txt2", "個股張數", placeholder = "以「空白鍵」隔開 (ex.3 1 ...)"),
+                             actionButton("submitbutton", "Submit", class = "btn btn-primary"),
+     
+                             useShinyjs(),                                           
+                             extendShinyjs(text = jsResetCode, functions = "reset"), # Add the js code to the page
+                             popify(actionButton("reset_button", "Reset", icon = icon("redo")),
+                                    title = "重新整理", 
+                                    content = "按此以重整頁面 或使用快捷鍵Ctrl+R",
+                                    placement = "right")
                            ), # sidebarPanel
                            
                            mainPanel(
@@ -50,25 +65,45 @@ ui <- fluidPage(theme = shinytheme("flatly"),
                              h4("您的持股"),
                              verbatimTextOutput("txtresult"),
                              verbatimTextOutput("txtresult2"),
-                             
+                             h5("若上方出現紅字警告，請再次檢查輸入格式是否以「空白鍵」隔開"),
+
                              tags$label(h3('Status/Output')), 
                              verbatimTextOutput("txtresult3"),
-                             plotOutput("plot"),
-                             h5("+ 表加入該股後改善, - 表變差"),
-                             tableOutput('tabledata'),
-                             h5("個股資訊："),
-                             tableOutput('tabledata2'),
-                             imageOutput("img")
+                             verbatimTextOutput("observe"),
+                             #span(textOutput("observe"), style="color:red"),
                              
-                           ) #mainPanel
+                             plotOutput("plot"),
+                             span(textOutput("descrip")),
+                             tableOutput('tabledata'),
+                             textOutput("info"),
+                             tableOutput('tabledata2'),
+                             imageOutput("img"),
+                           ), #mainPanel
+                           
+                           span(htmlOutput("observe2"), align = "center"),
+                           bsPopover("observe2", 
+                                     title = "重整頁面",
+                                     content = paste0("上方 ", icon = icon("redo"), "Reset 鈕"),
+                                     placement = "bottom"),
+                           
+                           span(".", style="color:white"),
+                           hr(),
+                           h5("Sources:"),
+                           h6(
+                             p(a("TEJ", href = "https://www.tej.com.tw/"),"台灣經濟新報資料庫 未調整股價資料")),
+                           h6(p("歡迎提供建議與回饋至 yt.ke.data@gmail.com")),
+                           h6("2021 by Yuntung Ke. Built with",
+                              img(src = "https://www.rstudio.com/wp-content/uploads/2014/04/shiny.png", height = "30px"),
+                              "by",
+                              img(src = "https://www.rstudio.com/wp-content/uploads/2014/07/RStudio-Logo-Blue-Gray.png", height = "30px"),
+                              ".")
                   ), #navbar 1
                   
-                  tabPanel("投資組合推薦", "This panel is intentionally left blank"),
+                  tabPanel("投資組合推薦", "This panel is intentionally left blank"), #navbar 2
                   
                   tabPanel("Data & Methodology", fluid = TRUE,
                            fluidRow(
                              column(6,
-                                    #br(),
                                     h4(strong("關於資料")),
                                     h5(strong("___________________________________________________________________")),
                                     br(),
@@ -79,10 +114,8 @@ ui <- fluidPage(theme = shinytheme("flatly"),
                                     br(),
                                     h5(p("▽VaR示意圖")),
                                     imageOutput("img2"),
-                                    
                              ),
                              column(6,
-                                    #br(),
                                     h4(strong("關於VaR")),
                                     h5(strong("___________________________________________________________________")),
                                     h5(p(a("風險價值", href = "https://reurl.cc/kZ1dpr"),"（Value at Risk，縮寫VaR），衡量市場風險的一種方法。")),
@@ -103,11 +136,10 @@ ui <- fluidPage(theme = shinytheme("flatly"),
                                     br(),
                                     h5(strong("▽ 持股健檢"),"程式採用",strong("分析法"),"，公式如下"),
                                     imageOutput("img3")
-                                    
                              )
                            ),
-                           
-                           shiny::hr(),
+                          
+                           hr(),
                            h5("Sources:"),
                            h6(
                              p("VaR說明截取自",
@@ -123,7 +155,7 @@ ui <- fluidPage(theme = shinytheme("flatly"),
                               img(src = "https://www.rstudio.com/wp-content/uploads/2014/07/RStudio-Logo-Blue-Gray.png", height = "30px"),
                               ".")
                            
-                  ) #navbar 2
+                  ) #navbar 3
                   
                 ) #navbarPage
 )
@@ -132,41 +164,39 @@ ui <- fluidPage(theme = shinytheme("flatly"),
 ##server###################################################
 server <- function(input, output, session) {
   
-  extract <- function(text) {
-    text <- gsub(" ", "", text)
-    split <- strsplit(text, ",", fixed = FALSE)[[1]]
-    as.numeric(split)
-  }
+  observeEvent(input$reset_button, {js$reset()})
   
   mydata1 <- reactive({
-    nums1 <- extract(input$txt1)
-    mystock <-scan(text=input$txt1,quiet=TRUE,sep=",")
+    mystock <-scan(text=input$txt1,quiet=TRUE,sep="")
     mystock
   })
   
   mydata2 <- reactive({
-    nums2 <- extract(input$txt2)
-    myquant <-scan(text=input$txt2,quiet=TRUE,sep=",")
+    myquant <-scan(text=input$txt2,quiet=TRUE,sep="")
     myquant
   })
   
-  #########
+##output 1####
   output$txtresult <- renderText({
     mystock <-  mydata1()
     myquant <-  mydata2()
     
-    code_quant = NULL
-    for(i in 1:length(mystock)){
-      if(mystock[i] %in% List_complete){
-        code_quant[i] <- paste(c(mystock[i], as.character(cleaned[cleaned$code == mystock[i],colnames(cleaned)== "name"][1,]),
-                                 myquant[i], "張" ,'\n'), collapse = " ")
-      }else{
-        code_quant <- as.character("抱歉，個股代碼輸入錯誤 或 該股資料筆數不足無法計算")
+    if(length(mystock) == 0){
+      code_quant <- as.character("請輸入持股")
+    }else{
+      code_quant = NULL
+      for(i in 1:length(mystock)){
+        if(mystock[i] %in% List_complete){
+          code_quant[i] <- paste(c(mystock[i], as.character(cleaned[cleaned$code == mystock[i],colnames(cleaned)== "name"][1,]),
+                                   myquant[i], "張" ,'\n'), collapse = " ")
+        }else{
+          code_quant <- as.character("抱歉，個股代碼輸入錯誤 或 該股資料筆數不足無法計算")
+        }
       }
     }
+    
     code_quant
   })
-  
   
   #####投組數據計算
   #投組價值
@@ -206,8 +236,7 @@ server <- function(input, output, session) {
     weightReturn
   }) 
   
-  
-  #########  
+##output 2####
   output$txtresult2 <- renderText({
     mystock <- mydata1()
     myquant <- mydata2()
@@ -228,9 +257,8 @@ server <- function(input, output, session) {
     
     showVaR
   })
-  
-  
-  #########
+ 
+#########
   datasetInput <- reactive({  
     mystock <- mydata1()
     myquant <- mydata2()
@@ -269,6 +297,7 @@ server <- function(input, output, session) {
     minCorr <- data.frame(sum_corr = apply(Corr, 2, sum)) 
     minCorr <- arrange(minCorr, sum_corr)
     top10_sum_corr <- row.names(minCorr)[1:10] #取最小相關前10名個股
+    
     
     #####避險投組數據計算
     #避險股權應購張數
@@ -321,7 +350,7 @@ server <- function(input, output, session) {
     #避險股*權重hedge_weight
     top10_hedge_weight = matrix(NA_integer_, nrow = length(top10_sum_corr), ncol = 1)
     for (j in 1:length(top10_sum_corr)) {
-      top10_hedge_weight[j] <- as.data.frame(hedge_weight[3,j] * cleaned[which(cleaned$"code"== top10_sum_corr[j]),6])  
+      top10_hedge_weight[j] <- as.data.frame(hedge_weight[length(mystock)+1,j] * cleaned[which(cleaned$"code"== top10_sum_corr[j]),6])  
     }
     top10_hedge_weight <- as.data.frame(top10_hedge_weight)
     colnames(top10_hedge_weight) <- c(top10_sum_corr)
@@ -329,8 +358,8 @@ server <- function(input, output, session) {
     #避險後投組
     hedge_return = NULL
     for (j in 1:length(top10_sum_corr)) {
-      for(h in seq(from = 1, to = 20, by = 2))
-        hedge_return[j] <- top10_hedge_weight[j] + apply(mystock_hedgeWeight[h:(h+1)], 1, sum)
+      for(h in seq(from = 1, to = 10*length(mystock), by = length(mystock)))
+        hedge_return[j] <- top10_hedge_weight[j] + apply(mystock_hedgeWeight[h:(h+length(mystock)-1)], 1, sum)
     }
     hedge_return <-  as.data.frame(hedge_return)
     colnames(hedge_return) <- c(top10_sum_corr)
@@ -342,9 +371,25 @@ server <- function(input, output, session) {
     
     #篩選避險後有改善風險之個股
     well_hedge <- hedge_port[which(hedge_port$VaR > portVaR),]
-    if(nrow(well_hedge) == 0){
-      cat("您的投資組合近乎完美!已找不到可加入之避險股!!",'\n',"再見");quit()
-    }
+    well_hedge
+  })
+  
+  datasetInput4 <- reactive({
+    well_hedge <- datasetInput()
+    
+    num_hedge  <- nrow(well_hedge)
+    num_hedge
+  })
+  
+  datasetInput5 <- reactive({
+    weightReturn <- mydata5()
+    avgReturn <- mean(rowSums(weightReturn)) #投組"平均"日報酬
+    sdReturn <- sd(rowSums(weightReturn)) #投組"平均"日標準差
+    #VaR分析法= 報酬率- Zα* σ   # Zα(95%)= 1.65
+    portVaR <- avgReturn - 1.65 * sdReturn
+    percent_portVaR <- -signif(portVaR,4) * 100
+    well_hedge <- datasetInput()
+    
     well_hedge[nrow(well_hedge)+1,] <- data.frame(origin = list(portVaR,avgReturn,c("")), row.names = c("原投組"))#比較
     well_hedge <- well_hedge[order(row.names(well_hedge)),]
     
@@ -357,10 +402,9 @@ server <- function(input, output, session) {
     well_hedge
   })
   
-  
-  #########    
+#########    
   datasetInput2 <- reactive({
-    well_hedge <- datasetInput()
+    well_hedge <- datasetInput5()
     
     names(stock) <- c("日期", "個股代碼", "簡稱", "產業別", "收盤價", "報酬率", "千成交量")
     df_well_hedge <- stock[which(stock$'個股代碼' %in% rownames(well_hedge) & stock$'日期' == max(stock$'日期')),c(2:5)]
@@ -368,9 +412,8 @@ server <- function(input, output, session) {
     df_well_hedge
   })
   
-  
   datasetInput3 <- reactive({ 
-    well_hedge <- datasetInput()
+    well_hedge <- datasetInput5()
     
     ret_sd <- data.frame((well_hedge$VaR) *-100,(well_hedge$"平均日報酬率")*100)
     colnames(ret_sd) <- c("日最大損失","日報酬率")
@@ -378,22 +421,61 @@ server <- function(input, output, session) {
     ret_sd
   })
   
-  
-  #########  
+##output 3####  
   output$txtresult3 <- renderPrint({
     if (input$submitbutton>0) { 
-      isolate("Calculation complete.") 
+      cat("Calculation complete.") 
     } else {
-      return("Server is ready for calculation.")
+      cat("Server is ready for calculation.")
     }
   })
   
+##output 4####
+  output$observe <- renderPrint({
+    if (input$submitbutton>0) { 
+      if(datasetInput4 () == 0){
+        stop("您的風險管理近乎完美!已找不到可加入之避險股!!再見")
+      }else {
+        cat("↓↓以下圖表為加入20%投組價值之個股的結果↓↓")
+      }
+    }
+  })
+  
+  output$observe2 <- renderPrint({
+    if (input$submitbutton>0) { 
+      if(datasetInput4 () == 0){
+        stop()
+      }else {
+        cat("- 感謝您的使用！如欲再降低投組風險，請","<font color=\"#D2B48C\"><u>","重整頁面","</u></font>","並加入避險股以獲建議 -")
+      }
+    }
+  })
+  
+  output$descrip <- renderPrint({
+    if (input$submitbutton>0) { 
+      if(datasetInput4 () == 0){
+        stop()
+      }else {
+        cat("+ 表加入該股後改善, - 表變差")
+      }
+    }
+  })
+  
+  output$info <- renderPrint({
+    if (input$submitbutton>0) { 
+      if(datasetInput4 () == 0){
+        stop()
+      }else {
+        cat("個股資訊：")
+      }
+    }
+  })
+  
+##plot########
   output$plot <- renderPlot({
     if (input$submitbutton>0) { 
-      isolate(datasetInput3())
       ret_sd <- datasetInput3()
       weightReturn <- mydata5()
-      
       avgReturn <- mean(rowSums(weightReturn)) #投組"平均"日報酬
       sdReturn <- sd(rowSums(weightReturn)) #投組"平均"日標準差
       
@@ -422,22 +504,27 @@ server <- function(input, output, session) {
     } 
   })
   
+##tb 1########
   output$tabledata <- renderTable({
     if (input$submitbutton>0) { 
-      isolate(datasetInput()) 
+      isolate(datasetInput5()) 
     } 
   },digits = 6)
-  
+
+##tb 2########
   output$tabledata2 <- renderTable({
     if (input$submitbutton>0) { 
       isolate(datasetInput2()) 
     } 
   })
   
-  output$img <- renderImage({
-    list(src="industry.png", width="100%", alt = "錯誤")
-  }, deleteFile=FALSE)
-  
+  observeEvent(input$submitbutton, {
+    pic <- list(src="industry.png", width="100%", alt = "錯誤")
+    output$img <- renderImage({
+      pic
+    }, deleteFile=FALSE)
+  })  
+
   output$img2 <- renderImage({
     list(src="dis_var.png", width="90%", alt = "錯誤")
   }, deleteFile=FALSE)
